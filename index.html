@@ -1,0 +1,271 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Jarvis - AI Assistant</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <div class="main-layout">
+        <div class="sidebar" id="sidebar">
+            <button id="new-chat-button"><i class="fas fa-plus"></i> New Chat</button>
+            <ul class="history-list" id="history-list"></ul>
+            <a href="{{ url_for('logout') }}" id="logout-button"><i class="fas fa-sign-out-alt"></i> Logout</a>
+        </div>
+        <div class="chat-container">
+            <div class="header">
+                <button id="menu-toggle"><i class="fas fa-bars"></i></button>
+                <h1 style="font-size: 30px;">Jarvis</h1>
+                <div class="profile-icon" title="{{ current_user.email }}">{{ current_user.email[0]|upper }}</div>
+            </div>
+            <div class="chat-window" id="chat-window"></div>
+            <div class="input-area">
+                <div class="upload-popover" id="upload-popover">
+                    <div class="popover-item" id="upload-file-button"><i class="fas fa-file-arrow-up"></i> Upload File</div>
+                    <div class="popover-item" id="open-camera-button"><i class="fas fa-camera"></i> Camera</div>
+                </div>
+                <form id="text-form" class="text-form">
+                    <button type="button" class="upload-button" id="upload-button-toggle"><i class="fas fa-plus"></i></button>
+                    <div id="file-preview-container"></div>
+                    <input type="text" id="text-input" placeholder="Loading chat..." autocomplete="off" disabled>
+                    <button type="submit" id="send-button" class="send-button" disabled><i class="fas fa-paper-plane"></i></button>
+                </form>
+                <input type="file" id="file-input" hidden accept="image/*,application/pdf,.doc,.docx,text/plain">
+                <button id="mic-button" class="mic-button" disabled><i class="fas fa-microphone"></i></button>
+            </div>
+        </div>
+    </div>
+    <div class="camera-modal" id="camera-modal">
+        <div class="camera-modal-content">
+            <video id="camera-stream" autoplay playsinline></video>
+            <div class="camera-controls">
+                <button id="capture-image-button">Capture</button>
+                <button id="close-camera-button">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- ELEMENT REFERENCES ---
+        const textForm = document.getElementById('text-form');
+        const textInput = document.getElementById('text-input');
+        const chatWindow = document.getElementById('chat-window');
+        const newChatButton = document.getElementById('new-chat-button');
+        const historyList = document.getElementById('history-list');
+        const micButton = document.getElementById('mic-button');
+        const uploadButtonToggle = document.getElementById('upload-button-toggle');
+        const uploadPopover = document.getElementById('upload-popover');
+        const uploadFileButton = document.getElementById('upload-file-button');
+        const openCameraButton = document.getElementById('open-camera-button');
+        const fileInput = document.getElementById('file-input');
+        const filePreviewContainer = document.getElementById('file-preview-container');
+        const cameraModal = document.getElementById('camera-modal');
+        const cameraStream = document.getElementById('camera-stream');
+        const captureImageButton = document.getElementById('capture-image-button');
+        const closeCameraButton = document.getElementById('close-camera-button');
+        const menuToggle = document.getElementById('menu-toggle');
+        const sidebar = document.getElementById('sidebar');
+
+        // --- STATE MANAGEMENT ---
+        let activeConversationId = null;
+        let uploadedFile = null;
+        let eventSource = null;
+
+        // --- INITIALIZATION & EVENT LISTENERS ---
+        document.addEventListener('DOMContentLoaded', loadInitialData);
+        newChatButton.addEventListener('click', createNewConversation);
+        textForm.addEventListener('submit', handleFormSubmit);
+        menuToggle.addEventListener('click', (e) => { e.stopPropagation(); sidebar.classList.toggle('visible'); });
+        document.addEventListener('click', (e) => {
+            if (!sidebar.contains(e.target) && !menuToggle.contains(e.target)) { sidebar.classList.remove('visible'); }
+            if (!uploadButtonToggle.contains(e.target) && !uploadPopover.contains(e.target)) { uploadPopover.style.display = 'none'; }
+        });
+        uploadButtonToggle.addEventListener("click", (e) => { e.stopPropagation(); uploadPopover.style.display = uploadPopover.style.display === 'block' ? 'none' : 'block'; });
+        uploadFileButton.addEventListener("click", () => { fileInput.click(); uploadPopover.style.display = 'none'; });
+        openCameraButton.addEventListener("click", () => { openCamera(); uploadPopover.style.display = 'none'; });
+        fileInput.addEventListener("change", handleFileSelect);
+        captureImageButton.addEventListener("click", captureImage);
+        closeCameraButton.addEventListener("click", closeCamera);
+        
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+            const recognition = new SpeechRecognition();
+            recognition.continuous = false; recognition.lang = 'en-US'; recognition.interimResults = false;
+            micButton.addEventListener('click', () => { if (activeConversationId && !micButton.disabled) recognition.start(); });
+            recognition.onstart = () => micButton.classList.add('listening');
+            recognition.onend = () => micButton.classList.remove('listening');
+            recognition.onresult = (event) => { textInput.value = event.results[0][0].transcript; handleFormSubmit(new Event('submit')); };
+            recognition.onerror = (e) => console.error("Speech Recognition Error:", e.error);
+        } else { micButton.disabled = true; }
+        
+        // --- CORE LOGIC ---
+        function handleFormSubmit(e) {
+            e.preventDefault();
+            const command = textInput.value.trim();
+            if ((!command && !uploadedFile) || !activeConversationId) return;
+
+            let displayCmd = command;
+            if (uploadedFile && !command) displayCmd = `[File: ${uploadedFile.name}]`;
+            else if (uploadedFile && command) displayCmd = `${command} [File: ${uploadedFile.name}]`;
+            
+            addMessageToUI('user', displayCmd);
+            routeCommand(command, uploadedFile);
+            textInput.value = "";
+            removeFilePreview();
+        }
+
+        function routeCommand(command, file) {
+        setInputAreaState(false);
+
+        // NEW, SMARTER LOGIC:
+        // Assume most commands are for the agent, unless they are simple questions.
+        const simpleChatKeywords = [
+    'what is', 'what\'s', 'what was', 'what are',
+    'who is', 'who\'s', 'who was',
+    'why', 'where', 'when',
+    'how', 'can you', 'could you',
+    'explain', 'define', 'summarize', 'tell me about',
+    'translate', 'write', 'create', 'give me'
+];
+        
+        const isSimpleChat = simpleChatKeywords.some(keyword => command.toLowerCase().startsWith(keyword));
+
+        // If a file is attached, it's ALWAYS an agent task.
+        // If it's NOT a simple chat question, it's also an agent task.
+        if (file || !isSimpleChat) {
+            console.log("Routing to: Agent (/process-command)");
+            sendFormDataCommand(command, file); // Send to Vision Agent
+        } else {
+            console.log("Routing to: Simple Chat (/stream-command)");
+            streamSimpleCommand(command); // Send to simple Chatbot
+        }
+    }
+
+        function streamSimpleCommand(command) {
+            if (eventSource) eventSource.close();
+            const indicator = createEmptyAssistantMessage();
+            let fullResponse = "";
+
+            eventSource = new EventSource(`/stream-command?command=${encodeURIComponent(command)}&conversation_id=${activeConversationId}`);
+            eventSource.onmessage = function (event) {
+                if (event.data === "[DONE]") {
+                    eventSource.close();
+                    finalizeMessage(fullResponse, indicator, false);
+                    return;
+                }
+                fullResponse += JSON.parse(event.data);
+                indicator.innerHTML = marked.parse(fullResponse + '<span class="typing-cursor"></span>');
+                chatWindow.scrollTop = chatWindow.scrollHeight;
+            };
+            eventSource.onerror = function () {
+                eventSource.close();
+                finalizeMessage(fullResponse, indicator, true);
+            };
+        }
+
+        async function sendFormDataCommand(command, file) {
+            const indicator = createEmptyAssistantMessage();
+            const formData = new FormData();
+            formData.append("command", command);
+            formData.append("conversation_id", activeConversationId);
+            if (file) formData.append("file", file);
+
+            try {
+                const res = await fetch("/process-command", { method: "POST", body: formData });
+                if (!res.ok) throw new Error(`Server error: ${res.statusText}`);
+                const data = await res.json();
+                
+                indicator.parentElement.remove();
+                addMessageToUI('assistant', data.response, data.is_long);
+                
+            } catch (err) {
+                console.error("Agent/File command failed:", err);
+                indicator.innerHTML = marked.parse("Sorry, I couldn't complete that task due to a network error.");
+            } finally {
+                setInputAreaState(true);
+                loadAndRenderSidebar();
+            }
+        }
+
+        function finalizeMessage(fullResponse, messageDiv, isError) {
+            if (isError) messageDiv.innerHTML = marked.parse(fullResponse || "[Connection error]");
+            else messageDiv.innerHTML = marked.parse(fullResponse);
+           
+            const isLong = fullResponse.split(' ').length > 15;
+            if (isLong && !isError) addReadAloudButton(messageDiv.parentElement, fullResponse);
+            setInputAreaState(true);
+            if (!isError) loadAndRenderSidebar(); 
+        }
+
+        // --- UI & HELPER FUNCTIONS ---
+        function speak(text, buttonElement) {
+            if (speechSynthesis.speaking) {
+                speechSynthesis.cancel();
+                document.querySelectorAll('.read-aloud-button.speaking').forEach(btn => { btn.classList.remove('speaking'); btn.innerHTML = '<i class="fas fa-volume-up"></i>'; });
+                return;
+            }
+            if (text) {
+                const utterance = new SpeechSynthesisUtterance(text.replace(/[*#`]/g, ""));
+                utterance.onend = () => { if (buttonElement) { buttonElement.classList.remove('speaking'); buttonElement.innerHTML = '<i class="fas fa-volume-up"></i>'; } };
+                utterance.onstart = () => {
+                    document.querySelectorAll('.read-aloud-button.speaking').forEach(btn => { btn.classList.remove('speaking'); btn.innerHTML = '<i class="fas fa-volume-up"></i>'; });
+                    if (buttonElement) { buttonElement.classList.add('speaking'); buttonElement.innerHTML = '<i class="fas fa-stop"></i>'; }
+                };
+                speechSynthesis.speak(utterance);
+            }
+        }
+        function addReadAloudButton(container, text) { const btn = document.createElement("button"); btn.className = "read-aloud-button"; btn.innerHTML = '<i class="fas fa-volume-up"></i>'; btn.onclick = () => speak(text, btn); container.appendChild(btn); }
+        
+        function addMessageToUI(sender, text, isLong = false) {
+            const container = document.createElement("div");
+            container.className = `message-container ${sender}-message-container`;
+            const message = document.createElement("div");
+            message.className = `message ${sender}-message`;
+            message.innerHTML = marked.parse(text);
+            container.appendChild(message);
+            if (sender === 'assistant' && isLong) {
+                addReadAloudButton(container, text);
+            }
+            chatWindow.appendChild(container);
+            container.scrollIntoView({ behavior: "smooth", block: "end" });
+        }
+
+        function createEmptyAssistantMessage() { const c = document.createElement("div"); c.className = "message-container assistant-message-container"; const m = document.createElement("div"); m.className = "message assistant-message"; m.innerHTML = '<span class="typing-cursor"></span>'; c.appendChild(m); chatWindow.appendChild(c); c.scrollIntoView({ behavior: "smooth", block: "end" }); return m; }
+        function setInputAreaState(enable) { textInput.disabled = !enable; document.getElementById('send-button').disabled = !enable; micButton.disabled = !enable; textInput.placeholder = enable ? "Ask Jarvis anything..." : "Jarvis is working..."; }
+        
+        // --- THIS IS THE UPDATED FUNCTION ---
+        async function loadInitialData() {
+            setInputAreaState(false);
+            const convos = await loadAndRenderSidebar();
+            
+            // Find if a "New Chat" already exists from a previous session.
+            const existingNewChat = convos.find(c => c.title === 'New Chat');
+
+            if (existingNewChat) {
+                // If an unused "New Chat" exists, just open it to avoid clutter.
+                console.log("Found existing 'New Chat'. Switching to it.");
+                await switchConversation(existingNewChat.id);
+            } else {
+                // Otherwise, create a fresh "New Chat" for a clean start.
+                console.log("No unused 'New Chat' found. Creating a new one.");
+                await createNewConversation();
+            }
+        }
+        
+        async function loadAndRenderSidebar() { try { const res = await fetch("/api/conversations"); const convos = await res.json(); historyList.innerHTML = ""; convos.forEach(c => { const li = document.createElement("li"); li.className = "history-item"; li.dataset.id = c.id; li.innerHTML = `<span class="history-item-title">${c.title}</span><button class="delete-chat-button" title="Delete Chat"><i class="fas fa-trash-alt"></i></button>`; li.querySelector(".history-item-title").addEventListener("click", () => switchConversation(c.id)); li.querySelector(".delete-chat-button").addEventListener("click", (e) => { e.stopPropagation(); deleteConversation(c.id); }); historyList.appendChild(li); }); if (activeConversationId) { document.querySelector(`.history-item[data-id='${activeConversationId}']`)?.classList.add('active'); } return convos; } catch (err) { console.error("Could not load sidebar:", err); return []; } }
+        async function createNewConversation() { setInputAreaState(false); const res = await fetch("/api/conversations", { method: "POST" }); const newConvo = await res.json(); await loadAndRenderSidebar(); await switchConversation(newConvo.id); }
+        async function switchConversation(id) { if (activeConversationId === id && chatWindow.children.length > 0) return; activeConversationId = id; document.querySelectorAll(".history-item.active").forEach(el => el.classList.remove("active")); const activeItem = document.querySelector(`.history-item[data-id='${id}']`); activeItem?.classList.add("active"); chatWindow.innerHTML = ""; setInputAreaState(false); const res = await fetch(`/api/conversations/${id}`); const msgs = await res.json(); msgs.forEach(m => addMessageToUI(m.sender, m.text, m.is_long)); setInputAreaState(true); chatWindow.scrollTop = chatWindow.scrollHeight; }
+        async function deleteConversation(id) { if (confirm("Delete this chat?")) { await fetch(`/api/conversations/${id}`, { method: "DELETE" }); if (activeConversationId === id) { const convos = await loadAndRenderSidebar(); if (convos.length > 0) await switchConversation(convos[0].id); else await createNewConversation(); } else { await loadAndRenderSidebar(); } } }
+        function handleFileSelect(e) { const file = e.target.files[0]; if (file) { uploadedFile = file; displayFilePreview(file); } }
+        function displayFilePreview(file) { filePreviewContainer.innerHTML = ""; const preview = document.createElement("div"); preview.className = "file-preview"; const isImage = file.type.startsWith("image/"); preview.innerHTML = `<div class="file-preview-thumbnail">${isImage ? '' : '<i class="fas fa-file-alt" style="font-size:24px;"></i>'}</div><button class="remove-file-button">×</button>`; if (isImage) { const reader = new FileReader(); reader.onload = (e) => { const img = new Image(); img.src = e.target.result; img.className = "file-preview-thumbnail"; preview.replaceChild(img, preview.firstChild); }; reader.readAsDataURL(file); } preview.querySelector(".remove-file-button").addEventListener("click", removeFilePreview); filePreviewContainer.appendChild(preview); }
+        function removeFilePreview() { uploadedFile = null; fileInput.value = ""; filePreviewContainer.innerHTML = ""; }
+        async function openCamera() { try { const stream = await navigator.mediaDevices.getUserMedia({ video: true }); cameraStream.srcObject = stream; cameraModal.style.display = "flex"; } catch (e) { alert("Could not access camera. Check permissions."); } }
+        function captureImage() { const canvas = document.createElement("canvas"); canvas.width = cameraStream.videoWidth; canvas.height = cameraStream.videoHeight; canvas.getContext("2d").drawImage(cameraStream, 0, 0); canvas.toBlob(blob => { const file = new File([blob], "capture.png", { type: "image/png" }); uploadedFile = file; displayFilePreview(file); closeCamera(); }, "image/png"); }
+        function closeCamera() { if (cameraStream.srcObject) { cameraStream.srcObject.getTracks().forEach(track => track.stop()); cameraStream.srcObject = null; } cameraModal.style.display = "none"; }
+    </script>
+</body>
+</html>

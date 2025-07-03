@@ -1,0 +1,25 @@
+<!-- templates/signup.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"><title>Sign Up - Jarvis</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='auth_style.css') }}">
+</head>
+<body>
+    <div class="auth-container">
+        <h1>Create Your Jarvis Account</h1><p>Get started with your personal AI assistant</p>
+        {% with messages = get_flashed_messages() %}{% if messages %}<div class="flash-error">{{ messages[0] }}</div>{% endif %}{% endwith %}
+        <form method="POST" action="/signup">
+            <div class="form-group"><label for="email">Email</label><input type="email" name="email" id="email" required autocomplete="off"></div>
+            <div class="form-group"><label for="password">Password</label><div class="password-wrapper"><input type="password" name="password" id="password" required autocomplete="off"><i class="fas fa-eye-slash toggle-password-icon" id="toggle-password"></i></div></div>
+            <button type="submit" class="auth-button">Sign Up</button>
+        </form>
+        <div class="switch-form"><p>Already have an account? <a href="{{ url_for('login') }}">Log In</a></p></div>
+    </div>
+    <script>
+        const t = document.getElementById('toggle-password'), p = document.getElementById('password');
+        t.addEventListener('click', function () { const e = p.getAttribute('type') === 'password' ? 'text' : 'password'; p.setAttribute('type', e); this.classList.toggle('fa-eye'); this.classList.toggle('fa-eye-slash'); });
+    </script>
+</body>
+</html>
