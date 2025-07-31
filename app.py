@@ -1,5 +1,10 @@
 # Production Flask app for deployment
 import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 from webapp import app, create_database_if_needed
 import assistant_core
 

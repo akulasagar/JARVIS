@@ -7,6 +7,10 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 import assistant_core
 import os, sys, webbrowser, time, json
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 from threading import Timer
 from sqlalchemy import inspect as sql_inspect
 
@@ -19,7 +23,7 @@ def resource_path(relative_path):
 app = Flask(__name__, template_folder=resource_path('templates'), static_folder=resource_path('static'))
 if getattr(sys, 'frozen', False): application_path = os.path.dirname(sys.executable)
 else: application_path = os.path.dirname(os.path.abspath(__file__))
-db_path = os.path.join(application_path, 'database.db'); app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'; app.config['SECRET_KEY'] = 'a-very-secret-string-for-flask'
+db_path = os.path.join(application_path, 'database.db'); app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'; app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'a-very-secret-string-for-flask')
 UPLOAD_FOLDER = os.path.join(application_path, 'uploads');
 if not os.path.exists(UPLOAD_FOLDER): os.makedirs(UPLOAD_FOLDER)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER; db = SQLAlchemy(app); login_manager = LoginManager(app); login_manager.login_view = 'login'

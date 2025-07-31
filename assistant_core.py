@@ -8,7 +8,14 @@ import fitz
 import docx
 
 # --- CONFIGURATION ---
-GEMINI_API_KEY = "AIzaSyDSk4ejEc1hP4w6ToYWtpw5nzt6Ej_FsiM"
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Get API key from environment variable
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 gemini_flash_model = None
 gemini_pro_vision_model = None
 
